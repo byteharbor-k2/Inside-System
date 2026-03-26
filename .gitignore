@@ -1,0 +1,26 @@
+# Editor metadata
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Generic C/C++ build outputs
+*.o
+*.obj
+*.d
+*.out
+a.out
+
+# Local build artifacts for OS course demos
+/OS_Spring_2026/course_2/hanoi-nr/hanoi-r
+/OS_Spring_2026/course_2/hanoi-nr/hanoi-nr
+/OS_Spring_2026/course_2/hanoi-nr/hanoi-forloop
+
+# Local tooling output
+compile_commands.json
