@@ -13,7 +13,7 @@ _start:
     syscall
 
     mov     $SYS_exit, %rax
-    mov     $1, %rdi
+    mov     $812, %rdi
     syscall
 
 #elif defined(__aarch64__)  /* ARM64 (PIE) */
@@ -26,7 +26,7 @@ _start:
     mov     x8, #SYS_write           // syscall number
     svc     #0                       // software interrupt
 
-    mov     x0, #1                   // status
+    mov     x0, #812                 // status
     mov     x8, #SYS_exit
     svc     #0
 

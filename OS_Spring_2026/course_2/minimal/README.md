@@ -1,3 +1,8 @@
 # 最小可执行文件
 
 为了理解操作系统上的程序，我们的目标是构造一个能直接被操作系统加载且打印 Hello World 的指令序列。如果你能想到这一点，剩下的一切都可以让 AI 帮助你。
+
+补充文档：
+
+- `gnu-binutils-common-commands.md`
+- `hack-minimal-binary-exit-code.md`

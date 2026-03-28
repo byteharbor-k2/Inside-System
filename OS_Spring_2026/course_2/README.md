@@ -12,3 +12,7 @@
 - `mini-rv32ima/`
 - `ccompile/`
 - `minimal/`
+
+补充文档：
+
+- `process-exit-status-and-shell.md`
