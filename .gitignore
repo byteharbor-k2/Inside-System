@@ -23,6 +23,7 @@ a.out
 /OS_Spring_2026/course_2/hanoi-nr/hanoi-forloop
 /OS_Spring_2026/course_2/minimal/minimal
 /OS_Spring_2026/course_2/minimal/minimal.s
+/OS_Spring_2026/course_3/cpu-reset/x86/boot.bin
 
 # Local tooling output
 compile_commands.json
