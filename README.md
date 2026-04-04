@@ -6,6 +6,7 @@
 
 - `Linux/ubuntu/`：Ubuntu 主机环境、输入法、TUN / DNS / Docker 网络问题排查与修复
 - `hardware/`：硬件与计算体系结构相关笔记
+- `OS_Spring_2026/`：2026 春操作系统课程代码与学习笔记同步
 
 ## 索引
 
@@ -33,6 +34,13 @@
 
 - [The_growth_of_computer_performance.md](hardware/The_growth_of_computer_performance.md)
   计算机性能增长阶段、关键机制与多核时代背景笔记。
+
+### OS Spring 2026
+
+- [OS_Spring_2026/README.md](OS_Spring_2026/README.md)
+  2026 春南京大学操作系统课程资料入口，包含 `course_2` 到 `course_5` 的代码同步记录。
+- [course_5/README.md](OS_Spring_2026/course_5/README.md)
+  第 5 讲“程序和进程”的代码同步说明，包含 `crazy-os/`、`proc-info/`、`pstree/`、`fork-dfs/`、`fork-demo/`、`execve-demo/`。
 
 ## 使用约定
 
