@@ -1,151 +1,175 @@
-# Ubuntu TUN / DNS / Docker 修复计划
+# Ubuntu TUN / DNS / Docker 完整修复计划
 
-更新时间：2026-03-12
+更新时间：2026-04-12
 
-## 1. 已确认的问题
+## 1. 当前结论
 
-- `pypi.org` 当前不是单纯缓存故障。主机通过 `systemd-resolved` 查询会报 `Received invalid reply`，但直接查询 TUN DNS 可以返回正常结果。
-- `dig +noedns` 对 `172.18.0.2` 和 `192.168.110.1` 查询 `pypi.org A` 时，回包都带异常 `OPT`。这说明当前故障点在 `systemd-resolved` 和上游 no-EDNS 回包的兼容性。
-- `singbox_tun` 当前使用 `172.18.0.1/30`，Docker bridge 同时占用 `172.18.0.0/16`。这是明确的地址重叠，不是“可能冲突”。
-- 当前整机默认路由和默认 DNS 都被 TUN 接管，因此 DNS 异常会被放大为整机故障，而不是单个应用故障。
+这次问题已经分成两部分处理：
+
+1. `pypi.org` / `files.pythonhosted.org` 解析失败的问题已经通过本地 `dnsmasq -> 172.18.0.2` 绕过 `systemd-resolved` 修掉。
+2. 但第一次修复只做了“代理开启时可用”，没有做“代理关闭时自动回退”。因此后来出现了两个遗留问题：
+   - 关闭 `sing-box TUN` 后，`/etc/resolv.conf` 仍然指向 `127.0.0.1`，而本地 `dnsmasq` 的唯一上游仍是 `172.18.0.2`，导致 DNS 立即失效。
+   - 如果 `sing-box` 停止时没有顺手撤掉 `ip rule 9000/9001/9002/9003/9010` 和 `table 2022`，公网流量仍可能被送往已经失效的 `singbox_tun`，从而表现为“整机没网”。
+
+所以这次的目标不是再修一次 PyPI，而是把上一次的半套方案补成真正闭环。
 
 ## 2. 修复目标
 
-- `pypi.org`、`files.pythonhosted.org`、`pythonhosted.org` 在 TUN 开启和关闭两种状态下都能稳定解析。
-- Docker 不再创建任何 `172.18.0.0/16` 网桥。
-- TUN、Docker、主机 DNS 三者职责分离，不再相互覆盖地址和控制面。
-- 主机 DNS 不再依赖 `systemd-resolved -> singbox_tun -> 上游` 这条不稳定链路。
+- `sing-box TUN` 开启时：
+  - 主机 DNS 走 `127.0.0.1 -> dnsmasq -> 172.18.0.2 -> sing-box`
+  - 保持 DNS 不泄露
+  - `pypi.org`、`files.pythonhosted.org` 正常
+- `sing-box TUN` 关闭时：
+  - `/etc/resolv.conf` 自动恢复到执行脚本前的备份状态
+  - 残留的 sing-box 策略路由自动清理
+  - 主机回到手机热点 / Wi-Fi 的直连模式
+- Docker 长期不再创建 `172.18.0.0/16` 自定义 bridge 网络
 
 ## 3. 最终架构
 
-- Docker 统一迁移到独立地址池，例如 `10.200.0.0/16` 和 `10.201.0.0/16`。
-- TUN 保留独立 /30 网段。
-  如果 V2rayN 仍硬编码 `172.18.0.1/30`，就把整段 `172.18.0.0/30` 视为 TUN 保留地址，Docker 永远不要再占用 `172.18.0.0/16`。
-- 主机应用统一查询本地 resolver（推荐 `127.0.0.1`），由本地 resolver 决定上游 DNS。
-- 本地 resolver 不直连公网 DNS，而是只转发到 `172.18.0.2` 这个 sing-box TUN DNS。这样既绕开 `systemd-resolved`，又保持 DNS 仍经 sing-box / 代理出口。
+### 3.1 TUN 开启时
 
-## 4. 执行计划
-
-### Phase 1: 先消除 Docker / TUN 地址重叠
-
-1. 修改 Docker 地址池。
-
-   `/etc/docker/daemon.json` 示例：
-
-   ```json
-   {
-     "default-address-pools": [
-       { "base": "10.200.0.0/16", "size": 24 },
-       { "base": "10.201.0.0/16", "size": 24 }
-     ]
-   }
-   ```
-
-2. 重建 Docker 网络。
-
-   目标不是“新增网络可用”，而是“现有 `172.18.0.0/16` bridge 消失”。已有容器和 compose 网络需要重建，否则旧 bridge 会继续保留。
-
-3. 验证主路由表。
-
-   修复后应满足：
-
-   - 允许存在 `172.18.0.0/30 dev singbox_tun`
-   - 不允许再存在 `172.18.0.0/16 dev br-*`
-
-### Phase 2: 把主机 DNS 从 `systemd-resolved` 故障链路上拿下来
-
-推荐方案：保留 TUN 负责转发流量，但主机 DNS 统一切到本地 forwarder，例如 `dnsmasq` 监听 `127.0.0.1`，并且只把请求转发到 `172.18.0.2`。
-
-原因：
-
-- 当前故障是 `systemd-resolved` 在 no-EDNS 路径上拒收异常回包。
-- 只做 `flush-caches` 或重启 TUN 只能临时缓解，不能消除同类故障。
-- 只给 `pypi.org` 打补丁可以先止血，但主机默认解析路径仍然不稳。
-
-本地 forwarder 的目标配置：
-
-- 监听：`127.0.0.1`
-- 默认上游：`172.18.0.2`
-- 由 sing-box 决定远端 DNS 如何经代理出口访问
-- 不把 `192.168.110.1` 或任何公网 DNS 作为主机应用可见的直接上游
-
-`dnsmasq` 示例：
-
-```conf
-no-resolv
-listen-address=127.0.0.1
-bind-interfaces
-cache-size=1000
-server=172.18.0.2
-edns-packet-max=1232
-clear-on-reload
+```text
+应用
+  -> /etc/resolv.conf
+  -> 127.0.0.1:53
+  -> dnsmasq
+  -> 172.18.0.2
+  -> sing-box DNS / 代理出口
 ```
 
-主机解析入口切换到本地 resolver：
+特点：
 
-- 让 `/etc/resolv.conf` 指向 `127.0.0.1`
-- 不再把 `127.0.0.53` 作为主机应用的活跃入口
+- 不经过 `systemd-resolved` 的活跃查询路径
+- 不把 DNS 直连到手机热点或运营商 DNS
+- 继续满足“全局 TUN 时不泄露 DNS”
 
-静态 `/etc/resolv.conf` 示例：
+### 3.2 TUN 关闭时
 
-```conf
-nameserver 127.0.0.1
-options timeout:2 attempts:2
+```text
+应用
+  -> /etc/resolv.conf（恢复到原始备份）
+  -> systemd-resolved / NetworkManager 当前链路 DNS
+  -> 手机热点网关 / 当前网络上游
 ```
 
-备注：
+同时：
 
-- 如果你仍把应用入口留在 `127.0.0.53`，那 `systemd-resolved` 的降级探测和异常回包拒收仍然会回来。
-- 这个方案的关键不是“本地 DNS”，而是“本地 DNS 只代理到 `172.18.0.2`”，因此不会把 DNS 直连到物理网卡上游。
+- `v2rayn-local-dns.service` 停止
+- `table 2022` 被清空
+- `ip rule 9000/9001/9002/9003/9010` 被清理
 
-### Phase 3: 缩小 sing-box / TUN 的职责
+这时主机就是普通直连主机，不再依赖 `sing-box`
 
-- TUN 负责默认路由和流量转发。
-- 主机 resolver 负责 DNS 上游选择。
-- 不再把 “TUN 自动接管 DNS” 当成长期设计。
+## 4. 落地脚本
 
-如果未来 V2rayN 支持自定义 TUN 地址，建议直接改成不落在 Docker 常见地址段内的独立网段，例如 `10.253.0.1/30`。如果做不到，就维持 `172.18.0.0/30` 仅供 TUN 使用，并把 Docker 永久迁出。
+### 4.1 DNS 自动切换
 
-## 5. 迁移顺序
+脚本：`scripts/apply_v2rayn_dns_frontend.sh`
 
-1. 先改 Docker 地址池并重建网络。
-2. 再部署本地 resolver，并把 `/etc/resolv.conf` 切到 `127.0.0.1`。
-3. 之后再重启 TUN / sing-box，确认它不再控制主机默认 DNS。
-4. 最后再处理应用层代理设置，例如 `pip`、`curl`、浏览器是否需要继续通过代理端解析。
+它现在不再只是“一次性把 `/etc/resolv.conf` 改成 `127.0.0.1`”，而是会安装一整套受管控的组件：
 
-这个顺序的原因是：如果先改 DNS，再在地址重叠的环境里验证，会把“协议兼容问题”和“路由冲突”混在一起，验收结果不可靠。
+- `v2rayn-local-dns.service`
+  - 只在 TUN 开启时运行 `dnsmasq`
+- `v2rayn-local-dns-sync.service`
+  - 一次执行的同步服务
+- `v2rayn-local-dns-sync.timer`
+  - 每 5 秒检查一次 `singbox_tun` 是否存在
+- `/usr/local/libexec/v2rayn-local-dns-sync.sh`
+  - 负责在 TUN 模式和直连模式之间切换
+
+同步脚本的行为：
+
+- 如果发现 `singbox_tun` 存在：
+  - 确保 `/etc/resolv.conf` 指向 `127.0.0.1`
+  - 确保 `dnsmasq` 启动
+  - `dnsmasq` 只转发到 `172.18.0.2`
+- 如果发现 `singbox_tun` 不存在：
+  - 停止 `dnsmasq`
+  - 把 `/etc/resolv.conf` 恢复成初次安装前的备份
+  - 清理残留的 sing-box 策略路由
+
+这样，TUN 开与关都能自动切换，不再需要手工改 DNS。
+
+### 4.2 Docker 永久迁出 `172.18.0.0/16`
+
+脚本：`scripts/configure_docker_address_pool.sh`
+
+它会修改 `/etc/docker/daemon.json`，把 Docker 自定义 bridge 网络地址池固定到：
+
+```json
+{
+  "default-address-pools": [
+    { "base": "10.200.0.0/16", "size": 24 },
+    { "base": "10.201.0.0/16", "size": 24 }
+  ]
+}
+```
+
+说明：
+
+- Docker 默认的 `bridge` 网络仍然可能保留 `172.17.0.0/16`，这是正常的
+- 关键是以后新建的 compose / 自定义 bridge 不再落到 `172.18.0.0/16`
+- 已存在的旧自定义网络不会自动改地址，仍然需要重建对应 compose 项目
+
+### 4.3 手工核对策略路由残留
+
+脚本：`scripts/check_singbox_policy_routing.sh`
+
+用途：
+
+- 在你手工关闭 `sing-box TUN` 后，快速判断 `table 2022` 和 `9000~9010` 这些规则是否还残留
+- 如果脚本在 `tun_present=no` 时仍看到 `table 2022` 或这些 `ip rule`，就说明 sing-box 关闭后没有清干净
+
+正常状态应该是：
+
+- `tun_present=yes` 时，这些规则存在
+- `tun_present=no` 时，这些规则不存在
+
+## 5. 执行顺序
+
+1. 先执行 DNS 管理脚本，装上自动回退机制
+2. 再执行 Docker 地址池脚本，永久迁出 `172.18.0.0/16`
+3. 手工关闭一次 `sing-box TUN`
+4. 立刻执行 `check_singbox_policy_routing.sh`
+5. 再核对 DNS 是否恢复成备份状态
+
+推荐命令：
+
+```bash
+sudo bash scripts/apply_v2rayn_dns_frontend.sh
+sudo bash scripts/configure_docker_address_pool.sh
+bash scripts/check_singbox_policy_routing.sh
+```
 
 ## 6. 验收标准
 
-### DNS
+### 6.1 TUN 开启时
 
-- `getent ahosts pypi.org` 返回 IPv4/IPv6 记录，不报 `Temporary failure in name resolution`
-- `getent ahosts files.pythonhosted.org` 返回记录
-- `curl -I https://pypi.org/simple/` 返回 HTTP 响应
-- TUN 开启和关闭各测一次，结果一致
+- `cat /etc/resolv.conf` 返回 `nameserver 127.0.0.1`
+- `systemctl is-active v2rayn-local-dns` 返回 `active`
+- `getent ahosts pypi.org` 正常返回
+- `ip route get 1.1.1.1` 命中 `table 2022` / `singbox_tun`
 
-### 路由
+### 6.2 TUN 关闭时
 
-- `ip route` 中不再出现任何 `172.18.0.0/16 dev br-*`
-- `ip route` 中只保留 TUN 的 `172.18.0.0/30`，或者保留你新指定的独立 TUN 网段
+- `cat /etc/resolv.conf` 不再是 `127.0.0.1`，而是恢复到备份内容或原始 symlink
+- `systemctl is-active v2rayn-local-dns` 返回 `inactive`
+- `bash scripts/check_singbox_policy_routing.sh` 返回 `stale_singbox_policy_routing=no`
+- `ip route get 1.1.1.1` 不再命中 `table 2022`
+- 浏览器和 `curl` 可直接通过手机热点访问公网
 
-### Docker
+### 6.3 Docker
 
-- `docker network inspect` 中所有自定义 bridge 都落在新的地址池
-- 重启 Docker 后不再自动生成 `172.18.0.0/16`
+- 新建的 compose 项目不再生成 `172.18.0.0/16` 自定义 bridge
+- `docker network inspect` 里新网络应落在 `10.200.0.0/16` 或 `10.201.0.0/16`
 
-## 7. 不再采用的做法
+## 7. 这次补齐后，哪些问题算真正收口
 
-- 不再把 `sudo resolvectl flush-caches` 当成主修复方案
-- 不再把“切代理后暂时恢复”当成问题已解决
-- 不再接受 Docker 和 TUN 共享 `172.18.0.1`
-- 不再依赖路由器 DNS 作为 PyPI 解析的最终上游
+- `pypi.org` 不再因为 `systemd-resolved` 的异常回包兼容性而失败
+- 关闭代理后，电脑不再因为 DNS 悬空或策略路由残留而“像断网”
+- Docker 不再反复和 `singbox_tun 172.18.0.0/30` 撞地址
 
 ## 8. 一句话决策
 
-长期方案只有两件事：
-
-1. 把 Docker 永久迁出 `172.18.0.0/16`
-2. 把主机 DNS 永久迁出 `systemd-resolved -> singbox_tun` 这条链路
-
-这两件事同时完成后，`pypi.org` 故障和 TUN / Docker 混乱才算真正收口。
+第一次修的是“代理开启时 PyPI 可用”；这一次补的是“代理关闭时主机能自动回到直连”，并且从 Docker 守护进程层面封住 `172.18.0.0/16` 冲突的复发路径。

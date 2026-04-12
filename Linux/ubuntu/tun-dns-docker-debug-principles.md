@@ -350,49 +350,54 @@ server=172.18.0.2
 
 - 一旦 `dnsmasq -> 172.18.0.2` 正常，就说明修复方向是对的
 
-## 8. 修复后的实际状态
+## 8. 第一次修复为什么只修好了一半
 
-截至 2026-03-13，这台机器上已经完成的状态是：
+截至 2026-03-13，第一次修复实际完成的是：
 
-### DNS
-
-- `/etc/resolv.conf` 已经改为：
-
-```conf
-nameserver 127.0.0.1
-options timeout:2 attempts:2
-```
-
+- `/etc/resolv.conf` 被改成 `nameserver 127.0.0.1`
 - 本机启用了 `v2rayn-local-dns.service`
-- 它启动 `dnsmasq`
 - `dnsmasq` 只转发到 `172.18.0.2`
+- Dify 的 `docker_default` 已删除，因此当时的 `172.18.0.0/16` 冲突消失
+- `poetry lock` / `poetry sync` 已恢复正常
 
-相关文件：
+这一步证明了“`127.0.0.1 -> dnsmasq -> 172.18.0.2` 能修好 PyPI”，但它还缺两块：
 
-- `/etc/systemd/system/v2rayn-local-dns.service`
-- `/etc/v2rayn-local-dnsmasq.conf`
-- `/etc/resolv.conf.v2rayn-backup`
-- `/etc/resolv.conf.v2rayn-backup-link`
+1. 没有处理 TUN 关闭后的 DNS 回退
+2. 没有处理 sing-box 关闭后可能残留的策略路由
 
-### Docker
+于是后来的主机状态变成：
 
-- Dify 部署已移除
-- Dify 的 `docker_default` 网络已删除
-- `docker network ls` 只剩：
-  - `bridge`
-  - `host`
-  - `none`
+- 代理开启时，PyPI 正常
+- 代理关闭时，`dnsmasq` 仍然只认识 `172.18.0.2`
+- 如果 `table 2022` 和 `9000~9010` 规则还在，公网包仍然会被扔进已经失效的 `singbox_tun`
 
-### 应用验证
+所以用户体感就是：“代理开着能用，代理一关整机像没网。”
 
-在 `SPV` 项目里：
+## 9. 第二次修补为什么要加自动回退
 
-- `poetry lock` 已能正常访问 `files.pythonhosted.org`
-- `poetry sync` 已能下载并安装大量 PyPI 依赖
+这次补的是控制面，不是再换一遍 DNS。
 
-这说明“主机 DNS -> PyPI 下载 -> Poetry 包管理器”这一整条链路已经恢复。
+新增的目标是：
 
-## 9. 如果以后问题再复发，优先怎么判断
+- `singbox_tun` 存在时：
+  - 维持 `127.0.0.1 -> dnsmasq -> 172.18.0.2`
+- `singbox_tun` 消失时：
+  - 停止 `dnsmasq`
+  - 恢复 `/etc/resolv.conf` 备份
+  - 清掉残留的 `table 2022` 和 `ip rule 9000/9001/9002/9003/9010`
+
+也就是说，第一次修的是“代理模式可用”，第二次修的是“代理模式和直连模式都能切换回来”。
+
+落地方式是：
+
+- 继续保留 `v2rayn-local-dns.service`
+- 新增 `v2rayn-local-dns-sync.service`
+- 新增 `v2rayn-local-dns-sync.timer`
+- 新增 `/usr/local/libexec/v2rayn-local-dns-sync.sh`
+
+其中同步脚本会定期检查 `singbox_tun` 是否存在，并据此切换主机 DNS 与路由收尾动作。
+
+## 10. 如果以后问题再复发，优先怎么判断
 
 先不要立即怀疑“代理挂了”。
 
@@ -426,7 +431,7 @@ docker network inspect <network>
 
 只要再看到 `172.18.0.0/16` 出现，就要立刻怀疑新的 Docker 项目又占了 TUN 地址段。
 
-## 10. 未来如果重新引入 Docker，应该怎么做
+## 11. 未来如果重新引入 Docker，应该怎么做
 
 当前是通过“删除 Dify 部署”直接解除冲突。以后如果重新跑 Docker 项目，建议至少满足下面之一：
 
@@ -438,7 +443,7 @@ docker network inspect <network>
 
 - 不要让 Docker 再碰 `172.18.0.0/16`
 
-## 11. 这次问题真正值得记住的心智模型
+## 12. 这次问题真正值得记住的心智模型
 
 这次最重要的经验不是某一条命令，而是下面这个判断顺序：
 
