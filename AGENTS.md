@@ -4,8 +4,12 @@
 
 This repository is a knowledge base for system notes and small Ubuntu utilities, not an application with a build output. Keep topic content grouped by domain:
 
-- `Linux/ubuntu/`: Ubuntu setup, networking, DNS, Docker, and input-method notes
+- `Linux/`: boot / UEFI / dual-boot notes
+- `Linux/ubuntu/`: Ubuntu setup, networking, DNS, and Docker notes
+- `Linux/ubuntu/typing/`: input-method (Fcitx5 + Rime) notes
+- `Linux/ubuntu/ai-studio/`: AI Studio host hardware, fan control, and terminal setup
 - `Linux/ubuntu/scripts/`: Bash helpers related to the Ubuntu docs
+- `OS_Spring_2026/`: OS course code and notes
 - `hardware/`: hardware and computer architecture notes
 - `README.md`: top-level index; update it when adding or moving major documents
 

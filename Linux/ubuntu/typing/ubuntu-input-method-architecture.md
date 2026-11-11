@@ -4,6 +4,11 @@
 **当前方案：** Fcitx5 5.1.7 + Rime 1.10.0 + 雾凇拼音 (Rime Ice)
 **最后更新：** 2026-03-12
 
+> **Ubuntu 26.04 / GNOME 50 更新（2026-11-11）：** 已无 Xorg 会话，环境变量改放 `~/.config/environment.d/`，
+> Lua 由 `librime-plugin-lua` 提供，候选框位置需 kimpanel 扩展。
+> 见 [Ubuntu 26.04 (GNOME Wayland) 安装 Fcitx5 + Rime 雾凇拼音](ubuntu-26.04-fcitx5-rime-wayland-setup.md)。
+> 本文的分层架构、Rime 概念和 patch 机制仍然适用。
+
 ---
 
 ## 一、Linux 输入法整体架构
